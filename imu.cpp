@@ -81,7 +81,7 @@ IMU::~IMU() {
 
 std::pair<bool, ImuData> IMU::getData(int num_iters) const {
 	ImuData v;
-	if(num_iters > 0 || sensor->getConnectionStatus() != SENSOR_CONNECTION_CONNECTED) {
+	if(num_iters <= 0 || sensor->getConnectionStatus() != SENSOR_CONNECTION_CONNECTED) {
 		return std::make_pair(false, v);
 	}
 
@@ -110,7 +110,7 @@ void IMU::connectDevice() {
 }
 
 void IMU::disconnectDevice() {
-	if(sensor != nullptr) {
+	if(manager != nullptr && sensor != nullptr) {
 		manager->removeSensor(sensor);
 	}
 }
