@@ -12,32 +12,33 @@
 
 void zeroData(ImuData& val) {
 	for(int x = 0; x < 3; ++x) {
-		val.a[x] += 0.0;
-		val.g[x] += 0.0;
-		val.b[x] += 0.0;
-		val.w[x] += 0.0;
-		val.r[x] += 0.0;
+		val.a[x] = 0.0;
+		val.g[x] = 0.0;
+		val.b[x] = 0.0;
+		val.w[x] = 0.0;
+		val.r[x] = 0.0;
 
-		val.aRaw[x] += 0.0;
-		val.gRaw[x] += 0.0;
-		val.bRaw[x] += 0.0;
+		val.aRaw[x] = 0.0;
+		val.gRaw[x] = 0.0;
+		val.bRaw[x] = 0.0;
 
-		val.linAcc[x] += 0.0;
+		val.linAcc[x] = 0.0;
 	}
 
 	for(int x = 0; x < 4; ++x) {
-		val.q[x] += 0.0;
+		val.q[x] = 0.0;
 	}
 
 	for(int x = 0; x < 9; ++x) {
-		val.rotationM[x]  += 0.0;
-		val.rotOffsetM[x] += 0.0;
+		val.rotationM[x]  = 0.0;
+		val.rotOffsetM[x] = 0.0;
 	}
 
-	val.pressure    += 0.0;
-	val.gTemp       += 0.0;
-	val.altitude    += 0.0;
-	val.temperature += 0.0;
+	val.pressure    = 0.0;
+	val.gTemp       = 0.0;
+	val.altitude    = 0.0;
+	val.temperature = 0.0;
+	val.timeStamp = 0.0;
 }
 
 void incrementData(ImuData& val, ImuData& incr) {
@@ -72,6 +73,8 @@ void incrementData(ImuData& val, ImuData& incr) {
 	val.gTemp       += incr.gTemp;
 	val.altitude    += incr.altitude;
 	val.temperature += incr.temperature;
+
+	val.timeStamp = incr.timeStamp;
 }
 
 void averageData(ImuData& val, int num) {
