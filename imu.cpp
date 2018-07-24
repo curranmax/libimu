@@ -10,6 +10,36 @@
 #include <string>
 #include <utility>
 
+void zeroData(ImuData& val) {
+	for(int x = 0; x < 3; ++x) {
+		val.a[x] += 0.0;
+		val.g[x] += 0.0;
+		val.b[x] += 0.0;
+		val.w[x] += 0.0;
+		val.r[x] += 0.0;
+
+		val.aRaw[x] += 0.0;
+		val.gRaw[x] += 0.0;
+		val.bRaw[x] += 0.0;
+
+		val.linAcc[x] += 0.0;
+	}
+
+	for(int x = 0; x < 4; ++x) {
+		val.q[x] += 0.0;
+	}
+
+	for(int x = 0; x < 9; ++x) {
+		val.rotationM[x]  += 0.0;
+		val.rotOffsetM[x] += 0.0;
+	}
+
+	val.pressure    += 0.0;
+	val.gTemp       += 0.0;
+	val.altitude    += 0.0;
+	val.temperature += 0.0;
+}
+
 void incrementData(ImuData& val, ImuData& incr) {
 	if(val.openMatId != 0 && val.openMatId != incr.openMatId) {
 		// Error?
@@ -74,18 +104,19 @@ void averageData(ImuData& val, int num) {
 	val.temperature /= float(num);
 }
 
-
 IMU::~IMU() {
 	disconnectDevice();
 }
 
 std::pair<bool, ImuData> IMU::getData(int num_iters) const {
-	ImuData v;
 	if(num_iters <= 0 || sensor->getConnectionStatus() != SENSOR_CONNECTION_CONNECTED) {
-		return std::make_pair(false, v);
+		return std::make_pair(false, ImuData());
 	}
 
 	ImuData sum_data;
+	ImuData v;
+
+	zeroData(sum_data);
 
 	for(int i = 0; i < num_iters; ++i) {
 		// TODO fix this busy wait.
