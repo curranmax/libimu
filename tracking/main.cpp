@@ -20,7 +20,7 @@ int main() {
 	
 
 	// 1)calibrate at no movement condition, collect 1024 sample, average the value as offset value: calibrationX // Only perform once before tracking begin
-	float calibrationX = 0;
+	float calibrationX = 0.0, calibrationY = 0.0, calibrationZ = 0.0;
 	int calibration_count = 8000;
 	int max_num_failure = 100, num_failure = 0;
 	for(int i = 0; i < calibration_count; ++i) {
@@ -37,8 +37,12 @@ int main() {
 		}
 			
 		calibrationX += output.second.linAcc[0];
+		calibrationY += output.second.linAcc[1];
+		calibrationZ += output.second.linAcc[2];
 	}
 	calibrationX = calibrationX / float(calibration_count);
+	calibrationY = calibrationY / float(calibration_count);
+	calibrationZ = calibrationZ / float(calibration_count);
 
 	if(num_failure >= max_num_failure) {
 		std::cerr << "Couldn't calibrate data" << std::endl;
@@ -123,7 +127,7 @@ int main() {
 			}
 
 			//after get inv matrix we can calculate the world frame acceleration
-			float AccX[3] = {d.linAcc[0], d.linAcc[1], d.linAcc[2]};
+			float AccX[3] = {d.linAcc[0] - calibrationX, d.linAcc[1] - calibrationY, d.linAcc[2] - calibrationZ};
 			float accWorld[3] = {0};
 			for (int i=0; i<3; i++){
 			  for (int j=0; j<3; j++){
@@ -133,7 +137,6 @@ int main() {
 			
 			//*********************************** rotatation matrix recover acceleration to world coordinate*****************************************************
 			accX[1] = accWorld[0];
-			//accX[1] = accX[1] - calibrationX*9.8; // apply the zero offset and get ready for filter and integrate
 
 			if(fabs(accX[1]) < zero_eps) {
 				zero_count++;
