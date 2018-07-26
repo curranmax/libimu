@@ -1,6 +1,9 @@
 example/example
 tracking/tracking
 
+# Temp files
+*~
+
 # Prerequisites
 *.d
 
