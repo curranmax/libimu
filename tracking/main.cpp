@@ -19,10 +19,10 @@ int main() {
 	const int num_samples = 5;
 	
 
-	// 1)calibrate at no movement condition, collect 1024 sample, average the value as offset value: sstateX // Only perform once before tracking begin
-	float sstateX = 0;
+	// 1)calibrate at no movement condition, collect 1024 sample, average the value as offset value: calibrationX // Only perform once before tracking begin
+	float calibrationX = 0;
 	int calibration_count = 8000;
-	int max_num_failure = 8000, num_failure = 0;
+	int max_num_failure = 100, num_failure = 0;
 	for(int i = 0; i < calibration_count; ++i) {
 		std::cout << "Calibration iter " << i + 1 << std::endl;
 		auto output = imu.getData();
@@ -36,9 +36,9 @@ int main() {
 			continue;
 		}
 			
-		sstateX += output.second.a[0];
+		calibrationX += output.second.linAcc[0];
 	}
-	sstateX = sstateX / float(calibration_count);
+	calibrationX = calibrationX / float(calibration_count);
 
 	if(num_failure >= max_num_failure) {
 		std::cerr << "Couldn't calibrate data" << std::endl;
@@ -50,7 +50,7 @@ int main() {
 	float positionX[2] = {0.0, 0.0}; // 1X2 array to hold position, initialize 
 	float velocityX[2] = {0.0, 0.0}; // 1X2 array to hold velocity, initialize
 
-	float prev_timestamp = -1.0	
+	float prev_timestamp = -1.0;
 	float t = float(num_samples) / 400; // the unit integration time intervel, eg: 512hz t=1/512 second, will change based on number of data took for average.
 
 	int zero_count = 0;
@@ -58,7 +58,7 @@ int main() {
 	const int zero_count_reset = 3;
 
 	while(true) {
-	  auto output = imu.getData(num_samples);
+		auto output = imu.getData(num_samples);
 		if(output.first) {
 			// See ImuData.h in LpSensor/include/ for more details.
 			ImuData d = output.second;
@@ -71,6 +71,8 @@ int main() {
 				t_delta = d.timeStamp - prev_timestamp;
 			}
 			prev_timestamp = d.timeStamp;
+
+			std::cout << "Time from last iter: " << t_delta << std::endl;
 
 			// Accelerometer Data
 			std::cout << "Acc(" << d.a[0] << ", " << d.a[1] << ", " << d.a[2] << "), ";
@@ -97,7 +99,7 @@ int main() {
 			// }
 			
 			// 3) reduce data noise by take 64 sample average. (imu.getData(num_samples) automatically gets the requested number of samples and averages them)
-			//accX[1] = (d.a[0]-sstateX)*9.8;// convect to m/s2
+			//accX[1] = (d.a[0]-calibrationX)*9.8;// convect to m/s2
 
 			//*********************************** rotatation matrix recover acceleration to world coordinate***************************************************** 
 			//accX[1] = d.aRaw[0]*9.8;
@@ -131,12 +133,7 @@ int main() {
 			
 			//*********************************** rotatation matrix recover acceleration to world coordinate*****************************************************
 			accX[1] = accWorld[0];
-			//accX[1] = accX[1] - sstateX*9.8; // apply the zero offset and get ready for filter and integrate
-			
-			// filter out minimum noise using mechanical filter
-			//if((accX[1]<=0.005) && (accX[1]>=-0.005)) {
-			//    accX[1] = 0.0;
-			//}
+			//accX[1] = accX[1] - calibrationX*9.8; // apply the zero offset and get ready for filter and integrate
 
 			if(fabs(accX[1]) < zero_eps) {
 				zero_count++;
@@ -147,12 +144,12 @@ int main() {
 
 			// 4) perform the velocity and position integration in time domain
 			if(zero_count < zero_count_reset) {
-				velocityX[1] = velocityX[0] + (accX[0] + (accX[1] - accX[0]) / 2.0) * t; //velocity
+				velocityX[1] = velocityX[0] + (accX[0] + (accX[1] - accX[0]) / 2.0) * t_delta; //velocity
 			} else {
 				velocityX[0] = 0.0;
 				velocityX[1] = 0.0;
 			}
-			positionX[1] = positionX[0] + (velocityX[0] + (velocityX[1] - velocityX[0]) / 2.0) * t; // position
+			positionX[1] = positionX[0] + (velocityX[0] + (velocityX[1] - velocityX[0]) / 2.0) * t_delta; // position
 
 			//current data become the initial data of next step
 			accX[0] = accX[1];
@@ -175,7 +172,7 @@ int main() {
 			std::cout << "acceleration: " << accX[1] << std::endl;
 			std::cout << "velocity:     " << velocityX[1] << std::endl;
 			std::cout << "position:     " << positionX[1] << std::endl;
-			std::cout << "sstateX:      " << sstateX*9.8 << " AccXori  " << d.a[0]*9.8 <<std::endl;
+			std::cout << "calibrationX:      " << calibrationX*9.8 << " AccXori  " << d.a[0]*9.8 <<std::endl;
 			//std::cout << "raw Acc:      " << d.aRaw[0] << std::endl;
 			std::cout << " X: " << d.r[0] << " Y: " << d.r[1] << " Z: " << d.r[2] << std::endl;
 			std::cout << "Rotation Matrix:    " << d.rotationM[0] << d.rotationM[1] << d.rotationM[2] << std::endl;
