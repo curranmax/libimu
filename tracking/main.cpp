@@ -49,6 +49,8 @@ int main() {
 	float accX[2] = {0.0, 0.0}; // 1X2 array to hold accelerometer [1] is t [2] is t+1, initialize
 	float positionX[2] = {0.0, 0.0}; // 1X2 array to hold position, initialize 
 	float velocityX[2] = {0.0, 0.0}; // 1X2 array to hold velocity, initialize
+
+	float prev_timestamp = -1.0	
 	float t = float(num_samples) / 400; // the unit integration time intervel, eg: 512hz t=1/512 second, will change based on number of data took for average.
 
 	int zero_count = 0;
@@ -58,9 +60,17 @@ int main() {
 	while(true) {
 	  auto output = imu.getData(num_samples);
 		if(output.first) {
-
 			// See ImuData.h in LpSensor/include/ for more details.
 			ImuData d = output.second;
+
+			float t_delta = 0.0;
+			if(prev_timestamp < 0) {
+				// Uses the approximate update time for the first iteration.
+				t_delta = t;
+			} else {
+				t_delta = d.timeStamp - prev_timestamp;
+			}
+			prev_timestamp = d.timeStamp;
 
 			// Accelerometer Data
 			std::cout << "Acc(" << d.a[0] << ", " << d.a[1] << ", " << d.a[2] << "), ";
