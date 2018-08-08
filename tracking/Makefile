@@ -1,6 +1,6 @@
 
-INC_PATH = -I /usr/local/include/
-LIB_FLAGS = -L /usr/local/lib/ -l imu -L /usr/lib/ -l LpSensor -l dl -l pthread
+INC_PATH = -I /usr/local/include/ -I /usr/local/include/gm
+LIB_FLAGS = -L /usr/local/lib/ -l imu -l gm -l usb-1.0 -l hidapi-libusb -L /usr/lib/ -l LpSensor -l dl -l pthread
 
 CC = g++
 CFLAGS = -Wall -std=c++11 $(INC_PATH)
