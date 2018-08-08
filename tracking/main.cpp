@@ -14,14 +14,14 @@ int main() {
 	IMU imu(DEFAULT_ADDRESS);
 	sleep(5);
 
-	const float distance = 1.5; // TxRx distance in meters.
+	const float TC_x = 0, TC_y = 1.5, TC_z = 0; // TX side center location (x y z)
 
-	const int num_samples = 5;
+	const int num_samples = 30;
 	
 
 	// 1)calibrate at no movement condition, collect 1024 sample, average the value as offset value: calibrationX // Only perform once before tracking begin
 	float calibrationX = 0.0, calibrationY = 0.0, calibrationZ = 0.0;
-	int calibration_count = 8000;
+	int calibration_count = 1000;
 	int max_num_failure = 100, num_failure = 0;
 	for(int i = 0; i < calibration_count; ++i) {
 		std::cout << "Calibration iter " << i + 1 << std::endl;
@@ -50,15 +50,15 @@ int main() {
 	}
 
 
-	float accX[2] = {0.0, 0.0}; // 1X2 array to hold accelerometer [1] is t [2] is t+1, initialize
-	float positionX[2] = {0.0, 0.0}; // 1X2 array to hold position, initialize 
-	float velocityX[2] = {0.0, 0.0}; // 1X2 array to hold velocity, initialize
+	float accX[2] = {0.0, 0.0}, accY[2] = {0.0, 0.0}, accZ[2] = {0.0, 0.0}; // 1X2 array to hold accelerometer [1] is t [2] is t+1, initialize
+	float positionX[2] = {0.0, 0.0}, positionY[2] = {0.0, 0.0}, positionZ[2] = {0.0, 0.0}; // 1X2 array to hold position, initialize 
+	float velocityX[2] = {0.0, 0.0}, velocityY[2] = {0.0, 0.0}, velocityZ[2] = {0.0, 0.0}; // 1X2 array to hold velocity, initialize
 
 	float prev_timestamp = -1.0;
 	float t = float(num_samples) / 400; // the unit integration time intervel, eg: 512hz t=1/512 second, will change based on number of data took for average.
 
 	int zero_count = 0;
-	const float zero_eps = 0.02;
+	const float zero_eps = 0.3;
 	const int zero_count_reset = 3;
 
 	while(true) {
@@ -82,7 +82,7 @@ int main() {
 			std::cout << "Acc(" << d.a[0] << ", " << d.a[1] << ", " << d.a[2] << "), ";
 
 			// Quaternion orientation data
-			std::cout << "Q(" << d.q[0] << ", " << d.q[1] << ", " << d.q[2] << ", " << d.q[3] << ")" << std::endl;
+			//std::cout << "Q(" << d.q[0] << ", " << d.q[1] << ", " << d.q[2] << ", " << d.q[3] << ")" << std::endl;
 
 			float theta = 0;
 
@@ -127,7 +127,7 @@ int main() {
 			}
 
 			//after get inv matrix we can calculate the world frame acceleration
-			float AccX[3] = {d.linAcc[0] - calibrationX, d.linAcc[1] - calibrationY, d.linAcc[2] - calibrationZ};
+			float AccX[3] = {d.linAcc[0]-calibrationX, d.linAcc[1]-calibrationY, d.linAcc[2]-calibrationZ};
 			float accWorld[3] = {0};
 			for (int i=0; i<3; i++){
 			  for (int j=0; j<3; j++){
@@ -137,8 +137,11 @@ int main() {
 			
 			//*********************************** rotatation matrix recover acceleration to world coordinate*****************************************************
 			accX[1] = accWorld[0];
+			accY[1] = accWorld[1];
+			accZ[1] = accWorld[2];
+			//stop
 
-			if(fabs(accX[1]) < zero_eps) {
+			if(fabs(accX[1]) && fabs(accY[1]) && fabs(accZ[1]) < zero_eps) {
 				zero_count++;
 
 			} else {
@@ -148,60 +151,90 @@ int main() {
 			// 4) perform the velocity and position integration in time domain
 			if(zero_count < zero_count_reset) {
 				velocityX[1] = velocityX[0] + (accX[0] + (accX[1] - accX[0]) / 2.0) * t_delta; //velocity
+				velocityY[1] = velocityY[0] + (accY[0] + (accY[1] - accY[0]) / 2.0) * t_delta;
+				velocityZ[1] = velocityZ[0] + (accZ[0] + (accZ[1] - accZ[0]) / 2.0) * t_delta;
 			} else {
 				velocityX[0] = 0.0;
 				velocityX[1] = 0.0;
+				velocityY[0] = 0.0;
+				velocityY[1] = 0.0;
+				velocityZ[0] = 0.0;
+				velocityZ[1] = 0.0;
 			}
-			positionX[1] = positionX[0] + (velocityX[0] + (velocityX[1] - velocityX[0]) / 2.0) * t_delta; // position
-
+			positionX[1] = positionX[0] + (velocityX[0] + (velocityX[1] - velocityX[0]) / 2.0) * t_delta; // position X
+			positionY[1] = positionY[0] + (velocityY[0] + (velocityY[1] - velocityY[0]) / 2.0) * t_delta; // position Y
+			positionZ[1] = positionZ[0] + (velocityZ[0] + (velocityZ[1] - velocityZ[0]) / 2.0) * t_delta; // position Z
 			//current data become the initial data of next step
 			accX[0] = accX[1];
+			accY[0] = accY[1];
+			accZ[0] = accZ[1];
 			velocityX[0] = velocityX[1];
+			velocityY[0] = velocityY[1];
+			velocityZ[0] = velocityZ[1];
 			positionX[0] = positionX[1];
+			positionY[0] = positionY[1];
+			positionZ[0] = positionZ[1];
 
 			// 5) get current Euler angle and calculate angle resposne with current integrated position
-			float EurZ = d.r[3];// read current eular angle                                                            !!! need grab IMU data!!!
-			if (positionX[1] > 0) {
-				theta = -(( 180 / pi * atan(distance/positionX[1]))+EurZ-90)/2;
-			} else if (positionX[1] < 0) {
-				theta = -((180/pi*atan(distance/positionX[1]))+EurZ-90)/2-90;
-			} else {
-				theta = 0;
-			}
+			float Tx_1 = 0, Tx_2 = 0;
+			Tx_1 = acos((positionZ[1]-TC_Z)/sqrt(pow((positionX[1]-TC_x),2)+pow((positionY[1]-TC_y),2)+pow((positionZ[1]-TC_z),2))) * 180.0/pi;
+			Tx_2 = acos((positionX[1]-TC_Z)/sqrt(pow((positionX[1]-TC_x),2)+pow((positionY[1]-TC_y),2))) * 180.0/pi;
 			
-
+		       
 			// ******************************angle response calculate end****************************************************
 
-			std::cout << "acceleration: " << accX[1] << std::endl;
-			std::cout << "velocity:     " << velocityX[1] << std::endl;
-			std::cout << "position:     " << positionX[1] << std::endl;
-			std::cout << "calibrationX:      " << calibrationX*9.8 << " AccXori  " << d.a[0]*9.8 <<std::endl;
+			std::cout << "accelerationX: " << accX[1] << "Y" << accY[1] << "Z" << accZ[1] << std::endl;
+			std::cout << "velocityX:     " << velocityX[1] << "   Y:      " << velocityY[1] << "   Z:      " << velocityZ[1] << std::endl;
+			std::cout << "positionX:     " << positionX[1] << "   Y:      " << positionY[1] << "   Z:      " << positionZ[1] << std::endl;
+			std::cout << "calibration:      " << calibrationX*9.8 << calibrationY*9.8 << calibrationZ*9.8 <<std::endl;
+			std::cout << "Tx_1:      " << Tx_1 << "      Tx_2      " << Tx_2 << std::endl;
+			//std::cout << "average data:     " << IMU::getData(5) << std::endl;
 			//std::cout << "raw Acc:      " << d.aRaw[0] << std::endl;
 			std::cout << " X: " << d.r[0] << " Y: " << d.r[1] << " Z: " << d.r[2] << std::endl;
-			std::cout << "Rotation Matrix:    " << d.rotationM[0] << d.rotationM[1] << d.rotationM[2] << std::endl;
-			std::cout << "Rotation Matrix:    " << d.rotationM[3] << d.rotationM[4] << d.rotationM[5] << std::endl;
-			std::cout << "Rotation Matrix:    " << d.rotationM[6] << d.rotationM[7] << d.rotationM[8] << std::endl;
+			//std::cout << "Rotation Matrix:    " << d.rotationM[0] << d.rotationM[1] << d.rotationM[2] << std::endl;
+			//std::cout << "Rotation Matrix:    " << d.rotationM[3] << d.rotationM[4] << d.rotationM[5] << std::endl;
+			//std::cout << "Rotation Matrix:    " << d.rotationM[6] << d.rotationM[7] << d.rotationM[8] << std::endl;
 
-			std::cout << "Det:       " << deter << std::endl;
+			//std::cout << "t_delta:       " << t_delta << std::endl;
 
 			for (int i=0; i<3; i++){
 			  std::cout << "Real world frame acc:    " << accWorld[i] << std::endl; 
 			}
 
-			/*point out rotation matrix
+			//point out rotation matrix
 			for (int i=0; i<3; i++){
 			  for(int j=0; j<3; j++){
 			    std::cout << mRot[i][j] ;
 			  }
 			  std::cout << std::endl;
 			}
+			/*print out INV metrix
+			for (int i=0; i<3; i++){
+			  for(int j=0; j<3; j++){
+			    std::cout << mInv[i][j] *mRot[i][j];
+			  }
+			  std::cout << std::endl;
+			  }
+			float verf[3][3] = {0};
+			for(int i=0; i<3; i++){
+			  for(int j=0; j<3; j++){
+		      
+			      for(int s=0; s<3; s++){
+				verf[i][j] += mRot[i][s] * mInv[s][j];
+			      }
+			  }
+			}
+			std::cout << "the result is:   " << std::endl;
+			for (int i=0; i<3; i++){
+			  for(int j=0; j<3; j++){
+			    std::cout << verf[i][j] ;
+			  }
+			  std::cout << std::endl;
+			}
 			*/
-			
-
-			//std::cout << "lin Acc:      " << d.linAcc[0] << d.linAcc[1] << d.linAcc[2] << std::endl;
-			// std::cout << "r[3]: " << d.r[3] << std::endl; 
-			// std::cout << "Theta: " << theta << std::endl;
 		}
+        
+
 	}
 }
 
