@@ -1,6 +1,8 @@
 
 #include <imu/imu.h>
 
+#include <simple_fso.h>
+
 #include <lpsensor/ImuData.h>
 
 #include <math.h>
@@ -10,7 +12,16 @@
 
 #define DEFAULT_ADDRESS  "00:04:3E:9B:A3:7E"
 
-int main() {
+int main(int argc, const char[] argv) {
+	if(argc!= 1 && argc != 2) {
+		std::cerr << "Usage is:" << std::endl << "tracking [FSO_DATA_FILE]" << std::endl;
+	}
+
+	SimpleFSO* fso = nullptr;
+	if(argc == 2) {
+		fso = new SimpleFSO(argv[1]);
+	}
+
 	IMU imu(DEFAULT_ADDRESS);
 	sleep(5);
 
