@@ -1,25 +1,41 @@
 
 #include <imu/imu.h>
 
-#include <simple_fso.h>
-
 #include <lpsensor/ImuData.h>
 
+#include <gm_utils.h>
+#include <simple_fso.h>
+
 #include <math.h>
+#include <signal.h>
 #include <unistd.h>
 
 #define pi 3.14159265
 
 #define DEFAULT_ADDRESS  "00:04:3E:9B:A3:7E"
 
-int main(int argc, const char[] argv) {
+bool loop = false;
+void loopHandler(int s) {
+	loop = false;
+}
+
+int main(int argc, char const *argv[]) {
 	if(argc!= 1 && argc != 2) {
 		std::cerr << "Usage is:" << std::endl << "tracking [FSO_DATA_FILE]" << std::endl;
 	}
 
 	SimpleFSO* fso = nullptr;
+	int init_gm1 = 0, init_gm2 = 0;
 	if(argc == 2) {
 		fso = new SimpleFSO(argv[1]);
+
+		if(!fso->isGM1Connected() || !fso->isGM2Connected()) {
+			std::cerr << "Couldn't connect to both GMs" << std::endl;
+			exit(1);
+		}
+
+		init_gm1 = fso->getGM1Val();
+		init_gm2 = fso->getGM2Val();
 	}
 
 	IMU imu(DEFAULT_ADDRESS);
@@ -72,7 +88,16 @@ int main(int argc, const char[] argv) {
 	const float zero_eps = 0.3;
 	const int zero_count_reset = 3;
 
-	while(true) {
+	// When the program receives a "Ctrl+C" it calls loopHandler instead of stopping.
+	struct sigaction sigIntHandler;
+	sigIntHandler.sa_handler = loopHandler;
+	sigemptyset(&sigIntHandler.sa_mask);
+	sigIntHandler.sa_flags = 0;
+
+	sigaction(SIGINT, &sigIntHandler, nullptr);
+
+	loop = true;
+	while(loop) {
 		auto output = imu.getData(num_samples);
 		if(output.first) {
 			// See ImuData.h in LpSensor/include/ for more details.
@@ -133,7 +158,7 @@ int main(int argc, const char[] argv) {
 			float mInv[3][3] = {0};
 			for (int i=0; i<3; i++){
 			  for (int j=0; j<3; j++)
-			    mInv[i][j] = ((mRot[(j+1)%3][(i+1)%3]*mRot[(j+2)%3][(i+2)%3])-(mRot[(j+1)%3][(i+2)%3]*mRot[(j+2)%3][(i+1)%3]))/deter; // calculate inverse matrix
+				mInv[i][j] = ((mRot[(j+1)%3][(i+1)%3]*mRot[(j+2)%3][(i+2)%3])-(mRot[(j+1)%3][(i+2)%3]*mRot[(j+2)%3][(i+1)%3]))/deter; // calculate inverse matrix
 			  
 			}
 
@@ -142,7 +167,7 @@ int main(int argc, const char[] argv) {
 			float accWorld[3] = {0};
 			for (int i=0; i<3; i++){
 			  for (int j=0; j<3; j++){
-			    accWorld[i]+= (mInv[i][j]*AccX[j]*9.8);
+				accWorld[i]+= (mInv[i][j]*AccX[j]*9.8);
 			  }
 			}
 			
@@ -188,64 +213,70 @@ int main(int argc, const char[] argv) {
 
 			// 5) get current Euler angle and calculate angle resposne with current integrated position
 			float Tx_1 = 0, Tx_2 = 0;
-			Tx_1 = acos((positionZ[1]-TC_Z)/sqrt(pow((positionX[1]-TC_x),2)+pow((positionY[1]-TC_y),2)+pow((positionZ[1]-TC_z),2))) * 180.0/pi;
-			Tx_2 = acos((positionX[1]-TC_Z)/sqrt(pow((positionX[1]-TC_x),2)+pow((positionY[1]-TC_y),2))) * 180.0/pi;
+			Tx_1 = acos((positionZ[1]-TC_z)/sqrt(pow((positionX[1]-TC_x),2)+pow((positionY[1]-TC_y),2)+pow((positionZ[1]-TC_z),2))) * 180.0/pi;
+			Tx_2 = acos((positionX[1]-TC_z)/sqrt(pow((positionX[1]-TC_x),2)+pow((positionY[1]-TC_y),2))) * 180.0/pi;
 			
-		       
+			if(fso != nullptr) {
+				std::cout << "FSO updated to: " << init_gm1 + thetaToGMUnit(Tx_2) << std::endl;
+
+				fso->setGM1Val(init_gm1 + thetaToGMUnit(Tx_2));
+			}
+			   
 			// ******************************angle response calculate end****************************************************
 
-			std::cout << "accelerationX: " << accX[1] << "Y" << accY[1] << "Z" << accZ[1] << std::endl;
-			std::cout << "velocityX:     " << velocityX[1] << "   Y:      " << velocityY[1] << "   Z:      " << velocityZ[1] << std::endl;
-			std::cout << "positionX:     " << positionX[1] << "   Y:      " << positionY[1] << "   Z:      " << positionZ[1] << std::endl;
-			std::cout << "calibration:      " << calibrationX*9.8 << calibrationY*9.8 << calibrationZ*9.8 <<std::endl;
-			std::cout << "Tx_1:      " << Tx_1 << "      Tx_2      " << Tx_2 << std::endl;
+			// std::cout << "accelerationX: " << accX[1] << "Y" << accY[1] << "Z" << accZ[1] << std::endl;
+			// std::cout << "velocityX:     " << velocityX[1] << "   Y:      " << velocityY[1] << "   Z:      " << velocityZ[1] << std::endl;
+			// std::cout << "positionX:     " << positionX[1] << "   Y:      " << positionY[1] << "   Z:      " << positionZ[1] << std::endl;
+			// std::cout << "calibration:      " << calibrationX*9.8 << calibrationY*9.8 << calibrationZ*9.8 <<std::endl;
+			// std::cout << "Tx_1:      " << Tx_1 << "      Tx_2      " << Tx_2 << std::endl;
 			//std::cout << "average data:     " << IMU::getData(5) << std::endl;
 			//std::cout << "raw Acc:      " << d.aRaw[0] << std::endl;
-			std::cout << " X: " << d.r[0] << " Y: " << d.r[1] << " Z: " << d.r[2] << std::endl;
+			// std::cout << " X: " << d.r[0] << " Y: " << d.r[1] << " Z: " << d.r[2] << std::endl;
 			//std::cout << "Rotation Matrix:    " << d.rotationM[0] << d.rotationM[1] << d.rotationM[2] << std::endl;
 			//std::cout << "Rotation Matrix:    " << d.rotationM[3] << d.rotationM[4] << d.rotationM[5] << std::endl;
 			//std::cout << "Rotation Matrix:    " << d.rotationM[6] << d.rotationM[7] << d.rotationM[8] << std::endl;
 
 			//std::cout << "t_delta:       " << t_delta << std::endl;
 
-			for (int i=0; i<3; i++){
-			  std::cout << "Real world frame acc:    " << accWorld[i] << std::endl; 
-			}
+			// for (int i=0; i<3; i++){
+			//   std::cout << "Real world frame acc:    " << accWorld[i] << std::endl; 
+			// }
 
 			//point out rotation matrix
-			for (int i=0; i<3; i++){
-			  for(int j=0; j<3; j++){
-			    std::cout << mRot[i][j] ;
-			  }
-			  std::cout << std::endl;
-			}
+			// for (int i=0; i<3; i++){
+			//   for(int j=0; j<3; j++){
+			// 	std::cout << mRot[i][j] ;
+			//   }
+			//   std::cout << std::endl;
+			// }
 			/*print out INV metrix
 			for (int i=0; i<3; i++){
 			  for(int j=0; j<3; j++){
-			    std::cout << mInv[i][j] *mRot[i][j];
+				std::cout << mInv[i][j] *mRot[i][j];
 			  }
 			  std::cout << std::endl;
 			  }
 			float verf[3][3] = {0};
 			for(int i=0; i<3; i++){
 			  for(int j=0; j<3; j++){
-		      
-			      for(int s=0; s<3; s++){
+			  
+				  for(int s=0; s<3; s++){
 				verf[i][j] += mRot[i][s] * mInv[s][j];
-			      }
+				  }
 			  }
 			}
 			std::cout << "the result is:   " << std::endl;
 			for (int i=0; i<3; i++){
 			  for(int j=0; j<3; j++){
-			    std::cout << verf[i][j] ;
+				std::cout << verf[i][j] ;
 			  }
 			  std::cout << std::endl;
 			}
 			*/
 		}
-        
-
 	}
+	signal(SIGINT, SIG_DFL);
+
+	delete fso;
 }
 
