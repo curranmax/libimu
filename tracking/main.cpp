@@ -1,4 +1,6 @@
 
+#include "vec.h"
+
 #include <imu/imu.h>
 
 #include <lpsensor/ImuData.h>
@@ -20,34 +22,53 @@ void loopHandler(int s) {
 }
 
 int main(int argc, char const *argv[]) {
-	if(argc!= 1 && argc != 2) {
-		std::cerr << "Usage is:" << std::endl << "tracking [FSO_DATA_FILE]" << std::endl;
+	// Check command line input
+	if(argc < 1 || argc > 3) {
+		std::cerr << "Usage is:" << std::endl << "tracking [FSO_DATA_FILE] [OUTPUT_FILE]" << std::endl;
 	}
 
-	SimpleFSO* fso = nullptr;
-	int init_gm1 = 0, init_gm2 = 0;
-	if(argc == 2) {
-		fso = new SimpleFSO(argv[1]);
+	std::string tx_fso_filename = "";
+	if(argc >= 2) {
+		tx_fso_filename = argv[1];
+	}
 
-		if(!fso->isGM1Connected() || !fso->isGM2Connected()) {
+	std::string out_filename = "";
+	if(argc >= 3) {
+		out_filename = argv[3];
+	}
+
+	// If fso data given, connects to the GMs.
+	SimpleFSO* tx_fso = nullptr;
+	int init_gm1 = 0, init_gm2 = 0;
+	if(tx_fso_filename != "" && tx_fso_filename == "none") {
+		tx_fso = new SimpleFSO(tx_fso_filename);
+
+		if(!tx_fso->isGM1Connected() || !tx_fso->isGM2Connected()) {
 			std::cerr << "Couldn't connect to both GMs" << std::endl;
 			exit(1);
 		}
 
-		init_gm1 = fso->getGM1Val();
-		init_gm2 = fso->getGM2Val();
+		init_gm1 = tx_fso->getGM1Val();
+		init_gm2 = tx_fso->getGM2Val();
 	}
 
+	std::ofstream *ofstr = nullptr;
+	if(out_filename != "") {
+		ofstr = new std::ofstream(out_filename, std::ofstream::out);
+	}
+
+	// Connects to the IMU
 	IMU imu(DEFAULT_ADDRESS);
-	sleep(5);
 
-	const float TC_x = 0, TC_y = 1.5, TC_z = 0; // TX side center location (x y z)
+	int timeout_s = 10;
+	bool is_connected = imu.waitForConnection(timeout_s);
+	if(!is_connected) {
+		std::cerr << "Unable to connect to IMU within " << timeout_s << " second timeout" << std::endl;
+		exit(1);
+	}
 
-	const int num_samples = 30;
-	
-
-	// 1)calibrate at no movement condition, collect 1024 sample, average the value as offset value: calibrationX // Only perform once before tracking begin
-	float calibrationX = 0.0, calibrationY = 0.0, calibrationZ = 0.0;
+	// Collects baseline readings for no movement
+	Vec calibration;
 	int calibration_count = 1000;
 	int max_num_failure = 100, num_failure = 0;
 	for(int i = 0; i < calibration_count; ++i) {
@@ -63,32 +84,57 @@ int main(int argc, char const *argv[]) {
 			continue;
 		}
 			
-		calibrationX += output.second.linAcc[0];
-		calibrationY += output.second.linAcc[1];
-		calibrationZ += output.second.linAcc[2];
+		calibration.x += output.second.linAcc[0];
+		calibration.y += output.second.linAcc[1];
+		calibration.z += output.second.linAcc[2];
 	}
-	calibrationX = calibrationX / float(calibration_count);
-	calibrationY = calibrationY / float(calibration_count);
-	calibrationZ = calibrationZ / float(calibration_count);
+	calibration /= float(calibration_count);
 
 	if(num_failure >= max_num_failure) {
 		std::cerr << "Couldn't calibrate data" << std::endl;
 		exit(1);
 	}
 
+	// ---------------
+	// |  Constants  |
+	// ---------------
+	// Location of Transmitter relative to reciever
+	const Vec tx_loc(0.0, 1.5, 0.0);
+	
+	// Number of samples to gather at each iteration
+	const int num_samples = 30;
 
-	float accX[2] = {0.0, 0.0}, accY[2] = {0.0, 0.0}, accZ[2] = {0.0, 0.0}; // 1X2 array to hold accelerometer [1] is t [2] is t+1, initialize
-	float positionX[2] = {0.0, 0.0}, positionY[2] = {0.0, 0.0}, positionZ[2] = {0.0, 0.0}; // 1X2 array to hold position, initialize 
-	float velocityX[2] = {0.0, 0.0}, velocityY[2] = {0.0, 0.0}, velocityZ[2] = {0.0, 0.0}; // 1X2 array to hold velocity, initialize
-
-	float prev_timestamp = -1.0;
-	float t = float(num_samples) / 400; // the unit integration time intervel, eg: 512hz t=1/512 second, will change based on number of data took for average.
-
+	// Values used in our rest mechanic
 	int zero_count = 0;
 	const float zero_eps = 0.3;
 	const int zero_count_reset = 3;
 
-	// When the program receives a "Ctrl+C" it calls loopHandler instead of stopping.
+	// ---------------
+	// |  Variables  |
+	// ---------------
+	
+	// Number of values to save
+	const int history = 2;
+	
+	// For each list, element at index i is from iteration (cur_iter - i). So element 0 is from the current iteration, element 1 is from the pervious iteration, ...
+	std::vector<Vec> acc(history), velocity(history), position(history);
+
+	// Used in calculating actual time difference between samples for integration.
+	float prev_timestamp = -1.0;
+	float t = float(num_samples) / 400; // the unit integration time intervel, eg: 512hz t=1/512 second, will change based on number of data took for average.
+
+	// Writes out initial parameters
+	if(ofstr != nullptr) {
+		(*ofstr) << "PARAMS" << std::endl;
+		(*ofstr) << "calibration_count|int|" << calibration_count << std::endl;
+		(*ofstr) << "calibration|Vec|" << calibration << std::endl;
+		(*ofstr) << "tx_loc|Vec|" << tx_loc << std::endl;
+		(*ofstr) << "zero_eps|float|" << zero_eps << std::endl;
+		(*ofstr) << "zero_count_reset|int|" << zero_count_reset << std::endl;
+		(*ofstr) << "START" << std::endl;
+	}
+
+	// Sets it up so that a "Ctrl+c" stops the loop
 	struct sigaction sigIntHandler;
 	sigIntHandler.sa_handler = loopHandler;
 	sigemptyset(&sigIntHandler.sa_mask);
@@ -98,11 +144,13 @@ int main(int argc, char const *argv[]) {
 
 	loop = true;
 	while(loop) {
+		// Gets data from the IMU
 		auto output = imu.getData(num_samples);
 		if(output.first) {
 			// See ImuData.h in LpSensor/include/ for more details.
 			ImuData d = output.second;
 
+			// Calculate time since last update.
 			float t_delta = 0.0;
 			if(prev_timestamp < 0) {
 				// Uses the approximate update time for the first iteration.
@@ -112,171 +160,188 @@ int main(int argc, char const *argv[]) {
 			}
 			prev_timestamp = d.timeStamp;
 
-			std::cout << "Time from last iter: " << t_delta << std::endl;
-
-			// Accelerometer Data
-			std::cout << "Acc(" << d.a[0] << ", " << d.a[1] << ", " << d.a[2] << "), ";
-
-			// Quaternion orientation data
-			//std::cout << "Q(" << d.q[0] << ", " << d.q[1] << ", " << d.q[2] << ", " << d.q[3] << ")" << std::endl;
-
-			float theta = 0;
-
-			// ******************************angle response calaulate start*************************************************/
-
-			// 2) check if the movement ends, look up acceleration continuously, if detect straight 25 point Acceleration ==0, set velocity to zero
-			// unsigned int countx;
-			// countx = 0;
-			// if(accX[1]==0){
-			// 	countx++;
-			// } else {
-			// 	countx = 0;
-			// }
-			
-			// if(countx >= 25) {
-			// 	velocityX[0]=0;
-			// 	velocityX[1]=0;
-			// }
-			
-			// 3) reduce data noise by take 64 sample average. (imu.getData(num_samples) automatically gets the requested number of samples and averages them)
-			//accX[1] = (d.a[0]-calibrationX)*9.8;// convect to m/s2
-
-			//*********************************** rotatation matrix recover acceleration to world coordinate***************************************************** 
-			//accX[1] = d.aRaw[0]*9.8;
-			
-			float m[4] = {0.0,0.0,0.0,0.0};
-			float deter = 0.0;
+			//*********************************** Transform IMU acceleration to world frame *****************************************************
+			float m[4] = {0.0, 0.0, 0.0, 0.0};
 			m[0] = d.q[0];//w
 			m[1] = d.q[1];//x
 			m[2] = d.q[2];//y
 			m[3] = d.q[3];//z
-			float mRot[3][3] = {{1-2*pow(m[2],2)-2*pow(m[3],2), 2*m[1]*m[2]-2*m[0]*m[3], 2*m[1]*m[3]+2*m[0]*m[2]}, {2*m[1]*m[2]+2*m[0]*m[3], 1-2*pow(m[1],2)-2*pow(m[3],2), 2*m[2]*m[3]-2*m[0]*m[1]}, {2*m[1]*m[3]-2*m[0]*m[2], 2*m[2]*m[3]+2*m[0]*m[1], 1-2*pow(m[1],2)-2*pow(m[2],2)}};// calculate rotation matrix
+
+			// Calculate rotation matrix.
+			float mRot[3][3] = {
+				{
+					float(1.0 - 2.0 * pow(m[2], 2.0) - 2.0 * pow(m[3], 2.0)),
+					float(2.0 * m[1] * m[2] - 2.0 * m[0] * m[3]),
+					float(2.0 * m[1] * m[3] + 2.0 * m[0] * m[2])
+				}, {
+					float(2.0 * m[1] * m[2] + 2.0 * m[0] * m[3]),
+					float(1.0 - 2.0 * pow(m[1], 2.0) - 2.0 * pow(m[3], 2.0)),
+					float(2.0 * m[2] * m[3] - 2.0 * m[0] * m[1])
+				}, {
+					float(2.0 * m[1] * m[3] - 2.0 * m[0] * m[2]),
+					float(2.0 * m[2] * m[3] + 2.0 * m[0] * m[1]),
+					float(1.0 - 2.0 * pow(m[1], 2.0) - 2.0 * pow(m[2], 2.0))
+				}
+			};
 			
-			for(int i=0; i<3; i++)
-			  deter = deter + (mRot[0][i]*(mRot[1][(i+1)%3] * mRot[2][(i+2)%3] - mRot[1][(i+2)%3] * mRot[2][(i+1)%3]));
+			// Calculate determinant of rotation matrix.
+			float deter = 0.0;
+			for(int i = 0; i < 3; ++i) {
+				deter = deter + (mRot[0][i] * (mRot[1][(i + 1) % 3] * mRot[2][(i + 2) % 3] - mRot[1][(i + 2) % 3] * mRot[2][(i + 1) % 3]));
+			}
 			
-			float mInv[3][3] = {0};
-			for (int i=0; i<3; i++){
-			  for (int j=0; j<3; j++)
-				mInv[i][j] = ((mRot[(j+1)%3][(i+1)%3]*mRot[(j+2)%3][(i+2)%3])-(mRot[(j+1)%3][(i+2)%3]*mRot[(j+2)%3][(i+1)%3]))/deter; // calculate inverse matrix
-			  
+			// Calculate inverse rotation matrix
+			float mInv[3][3];
+			for (int i = 0; i < 3; ++i){
+			  for (int j = 0; j < 3; ++j)
+				mInv[i][j] =
+					(
+						(mRot[(j + 1) % 3][(i + 1) % 3] * mRot[(j + 2) % 3][(i + 2) % 3]) -
+						(mRot[(j + 1) % 3][(i + 2) % 3] * mRot[(j + 2) % 3][(i + 1) % 3])
+					) / deter;
 			}
 
-			//after get inv matrix we can calculate the world frame acceleration
-			float AccX[3] = {d.linAcc[0]-calibrationX, d.linAcc[1]-calibrationY, d.linAcc[2]-calibrationZ};
-			float accWorld[3] = {0};
-			for (int i=0; i<3; i++){
-			  for (int j=0; j<3; j++){
-				accWorld[i]+= (mInv[i][j]*AccX[j]*9.8);
+			// Use inverse rotation matrix to find acceleration in the world frame
+			Vec imu_acc(d.linAcc[0] - calibration.x, d.linAcc[1] - calibration.y, d.linAcc[2] - calibration.z);
+			Vec acc_world;
+			for (int i = 0; i < 3; ++i){
+			  for (int j = 0; j < 3; ++j){
+				acc_world[i] += (mInv[i][j] * imu_acc[j] * 9.8);
 			  }
 			}
-			
-			//*********************************** rotatation matrix recover acceleration to world coordinate*****************************************************
-			accX[1] = accWorld[0];
-			accY[1] = accWorld[1];
-			accZ[1] = accWorld[2];
-			//stop
 
-			if(fabs(accX[1]) && fabs(accY[1]) && fabs(accZ[1]) < zero_eps) {
+
+			//*********************************** Reset velocity if acceleration is low. *****************************************************
+			if(acc_world.mag() < zero_eps) {
 				zero_count++;
-
 			} else {
 				zero_count = 0;
 			}
 
-			// 4) perform the velocity and position integration in time domain
+			//*********************************** Perform discrete integration. *****************************************************
+			acc[0] = acc_world;
+
 			if(zero_count < zero_count_reset) {
-				velocityX[1] = velocityX[0] + (accX[0] + (accX[1] - accX[0]) / 2.0) * t_delta; //velocity
-				velocityY[1] = velocityY[0] + (accY[0] + (accY[1] - accY[0]) / 2.0) * t_delta;
-				velocityZ[1] = velocityZ[0] + (accZ[0] + (accZ[1] - accZ[0]) / 2.0) * t_delta;
+				// Integrate acceleration to get velocity
+				velocity[0] = velocity[1] + (acc[1] + (acc[0] - acc[1]) / 2.0) * t_delta;
 			} else {
-				velocityX[0] = 0.0;
-				velocityX[1] = 0.0;
-				velocityY[0] = 0.0;
-				velocityY[1] = 0.0;
-				velocityZ[0] = 0.0;
-				velocityZ[1] = 0.0;
+				// Resets velocity to zero if rest limit has been reached.
+				velocity = std::vector<Vec>(history);
 			}
-			positionX[1] = positionX[0] + (velocityX[0] + (velocityX[1] - velocityX[0]) / 2.0) * t_delta; // position X
-			positionY[1] = positionY[0] + (velocityY[0] + (velocityY[1] - velocityY[0]) / 2.0) * t_delta; // position Y
-			positionZ[1] = positionZ[0] + (velocityZ[0] + (velocityZ[1] - velocityZ[0]) / 2.0) * t_delta; // position Z
-			//current data become the initial data of next step
-			accX[0] = accX[1];
-			accY[0] = accY[1];
-			accZ[0] = accZ[1];
-			velocityX[0] = velocityX[1];
-			velocityY[0] = velocityY[1];
-			velocityZ[0] = velocityZ[1];
-			positionX[0] = positionX[1];
-			positionY[0] = positionY[1];
-			positionZ[0] = positionZ[1];
 
+			// Integrates position from velocity
+			position[0] = position[1] + (velocity[1] + (velocity[0] + velocity[1]) / 2.0) * t_delta;
+
+			//*********************************** Calculates angles for GM mirrors. *****************************************************
+			Vec cur_imu_pos = position[0];
 			// 5) get current Euler angle and calculate angle resposne with current integrated position
-			float Tx_1 = 0, Tx_2 = 0;
-			Tx_1 = acos((positionZ[1]-TC_z)/sqrt(pow((positionX[1]-TC_x),2)+pow((positionY[1]-TC_y),2)+pow((positionZ[1]-TC_z),2))) * 180.0/pi;
-			Tx_2 = acos((positionX[1]-TC_z)/sqrt(pow((positionX[1]-TC_x),2)+pow((positionY[1]-TC_y),2))) * 180.0/pi;
+			float tx_angle_1 = 0, tx_angle_2 = 0; // In degrees
+			tx_angle_1 = acos((cur_imu_pos.z - tx_loc.z) / sqrt(pow(cur_imu_pos.x - tx_loc.x, 2) + pow(cur_imu_pos.y - tx_loc.y, 2) + pow(cur_imu_pos.z - tx_loc.z, 2))) * 180.0 / pi;
+			tx_angle_2 = acos((cur_imu_pos.x - tx_loc.z) / sqrt(pow(cur_imu_pos.x - tx_loc.x, 2) + pow(cur_imu_pos.y - tx_loc.y, 2))) * 180.0 / pi - 90.0;
 			
-			if(fso != nullptr) {
-				std::cout << "FSO updated to: " << init_gm1 + thetaToGMUnit(Tx_2) << std::endl;
+			// Adjust the tx_fso if it is connected.
+			int tx_gm1_val = 0, tx_gm2_val = 0;
+			tx_gm1_val = init_gm1 + degreeToGMUnit(tx_angle_1);
+			tx_gm2_val = init_gm2 + degreeToGMUnit(tx_angle_2);
 
-				fso->setGM1Val(init_gm1 + thetaToGMUnit(Tx_2));
+			if(tx_fso != nullptr) {
+				tx_fso->setGM1Val(tx_gm1_val);
 			}
 			   
-			// ******************************angle response calculate end****************************************************
+			// ****************************** Output ****************************************************
+			std::cout << "-----------------------------------------------------------------------" << std::endl;
+			std::cout << "q " << d.q[0] << ", " << d.q[1] << ", " << d.q[2] << ", " << d.q[3] << std::endl;
+			std::cout << "mRot" << std::endl
+					<< mRot[0][0] << ", " << mRot[0][1] << ", " << mRot[0][2] << std::endl
+					<< mRot[1][0] << ", " << mRot[1][1] << ", " << mRot[1][2] << std::endl
+					<< mRot[2][0] << ", " << mRot[2][1] << ", " << mRot[2][2] << std::endl;
+			std::cout << "deter " << deter << std::endl;
+			std::cout << "mInv" << std::endl
+					<< mInv[0][0] << ", " << mInv[0][1] << ", " << mInv[0][2] << std::endl
+					<< mInv[1][0] << ", " << mInv[1][1] << ", " << mInv[1][2] << std::endl
+					<< mInv[2][0] << ", " << mInv[2][1] << ", " << mInv[2][2] << std::endl;
+			
 
-			// std::cout << "accelerationX: " << accX[1] << "Y" << accY[1] << "Z" << accZ[1] << std::endl;
-			// std::cout << "velocityX:     " << velocityX[1] << "   Y:      " << velocityY[1] << "   Z:      " << velocityZ[1] << std::endl;
-			// std::cout << "positionX:     " << positionX[1] << "   Y:      " << positionY[1] << "   Z:      " << positionZ[1] << std::endl;
-			// std::cout << "calibration:      " << calibrationX*9.8 << calibrationY*9.8 << calibrationZ*9.8 <<std::endl;
-			// std::cout << "Tx_1:      " << Tx_1 << "      Tx_2      " << Tx_2 << std::endl;
-			//std::cout << "average data:     " << IMU::getData(5) << std::endl;
-			//std::cout << "raw Acc:      " << d.aRaw[0] << std::endl;
-			// std::cout << " X: " << d.r[0] << " Y: " << d.r[1] << " Z: " << d.r[2] << std::endl;
-			//std::cout << "Rotation Matrix:    " << d.rotationM[0] << d.rotationM[1] << d.rotationM[2] << std::endl;
-			//std::cout << "Rotation Matrix:    " << d.rotationM[3] << d.rotationM[4] << d.rotationM[5] << std::endl;
-			//std::cout << "Rotation Matrix:    " << d.rotationM[6] << d.rotationM[7] << d.rotationM[8] << std::endl;
+			std::cout << "imu_acc " << imu_acc << std::endl;
+			
+			std::cout << "t_delta " << t_delta << std::endl;
 
-			//std::cout << "t_delta:       " << t_delta << std::endl;
+			std::cout << "acc_world " << acc_world << std::endl;
+			std::cout << "velocity " << velocity[0] << std::endl;
+			std::cout << "position " << position[0] << std::endl;
 
-			// for (int i=0; i<3; i++){
-			//   std::cout << "Real world frame acc:    " << accWorld[i] << std::endl; 
-			// }
+			std::cout << "tx_angle_1 " << tx_angle_1 << std::endl;
+			std::cout << "tx_angle_2 " << tx_angle_2 << std::endl;
 
-			//point out rotation matrix
-			// for (int i=0; i<3; i++){
-			//   for(int j=0; j<3; j++){
-			// 	std::cout << mRot[i][j] ;
-			//   }
-			//   std::cout << std::endl;
-			// }
-			/*print out INV metrix
-			for (int i=0; i<3; i++){
-			  for(int j=0; j<3; j++){
-				std::cout << mInv[i][j] *mRot[i][j];
-			  }
-			  std::cout << std::endl;
-			  }
-			float verf[3][3] = {0};
-			for(int i=0; i<3; i++){
-			  for(int j=0; j<3; j++){
-			  
-				  for(int s=0; s<3; s++){
-				verf[i][j] += mRot[i][s] * mInv[s][j];
-				  }
-			  }
+			std::cout << "tx_gm1_val " << tx_gm1_val << std::endl;
+			std::cout << "tx_gm2_val " << tx_gm2_val << std::endl;;
+
+			if(ofstr != nullptr) {
+				(*ofstr) << "q|int[4]|" << d.q[0] << "," << d.q[1] << "," << d.q[2] << "," << d.q[3] << " ";
+				(*ofstr) << "mRot|matrix|" << mRot[0][0] << "," << mRot[0][1] << "," << mRot[0][2] << ";"
+										   << mRot[1][0] << "," << mRot[1][1] << "," << mRot[1][2] << ";"
+										   << mRot[2][0] << "," << mRot[2][1] << "," << mRot[2][2] << " ";
+				(*ofstr) << "deter|int|" << deter << " ";
+				(*ofstr) << "mInv|matrix|" << mInv[0][0] << "," << mInv[0][1] << "," << mInv[0][2] << ";"
+										   << mInv[1][0] << "," << mInv[1][1] << "," << mInv[1][2] << ";"
+										   << mInv[2][0] << "," << mInv[2][1] << "," << mInv[2][2] << " ";
+				(*ofstr) << "imu_acc|Vec|" << imu_acc << " ";
+				(*ofstr) << "t_delta|float|" << t_delta << " ";
+				(*ofstr) << "acc_world|Vec|" << acc_world << " ";
+				
+				(*ofstr) << "acc|vector<Vec>|";
+				for(unsigned int i = 0; i < acc.size(); ++i) {
+					(*ofstr) << acc[i];
+					if(i < acc.size() - 1) {
+						(*ofstr) << ";";
+					}
+				}
+				(*ofstr) << " ";
+
+				(*ofstr) << "velocity|vector<Vec>|";
+				for(unsigned int i = 0; i < velocity.size(); ++i) {
+					(*ofstr) << velocity[i];
+					if(i < velocity.size() - 1) {
+						(*ofstr) << ";";
+					}
+				}
+				(*ofstr) << " ";
+
+				(*ofstr) << "position|vector<Vec>|";
+				for(unsigned int i = 0; i < position.size(); ++i) {
+					(*ofstr) << position[i];
+					if(i < position.size() - 1) {
+						(*ofstr) << ";";
+					}
+				}
+				(*ofstr) << " ";
+
+				(*ofstr) << "tx_angle_1|float|" << tx_angle_1 << " ";
+				(*ofstr) << "tx_angle_2|float|" << tx_angle_2 << " ";
+
+				(*ofstr) << "tx_gm1_val|float|" << tx_gm1_val << " ";
+				(*ofstr) << "tx_gm2_val|float|" << tx_gm2_val;
+
+				(*ofstr) << std::endl;
 			}
-			std::cout << "the result is:   " << std::endl;
-			for (int i=0; i<3; i++){
-			  for(int j=0; j<3; j++){
-				std::cout << verf[i][j] ;
-			  }
-			  std::cout << std::endl;
+
+			//*********************************** Updates data for next iteration. *****************************************************
+			for(int i = history - 1; i > 0; --i) {
+				acc[i] = acc[i - 1];
+				velocity[i] = velocity[i - 1];
+				position[i] = position[i - 1];
 			}
-			*/
 		}
 	}
 	signal(SIGINT, SIG_DFL);
 
-	delete fso;
+	if(tx_fso != nullptr) {
+		delete tx_fso;
+	}
+
+	if(ofstr != nullptr) {
+		ofstr->close();
+		delete ofstr;
+	}
 }
 
