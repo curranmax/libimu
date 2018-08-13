@@ -4,10 +4,12 @@
 #include <lpsensor/LpmsSensorI.h>
 #include <lpsensor/LpmsSensorManagerI.h>
 
+#include <chrono>
 #include <iostream>
 #include <thread>
 #include <memory>
 #include <string>
+#include <unistd.h>
 #include <utility>
 
 void zeroData(ImuData& val) {
@@ -112,7 +114,7 @@ IMU::~IMU() {
 }
 
 std::pair<bool, ImuData> IMU::getData(int num_iters) const {
-	if(num_iters <= 0 || sensor->getConnectionStatus() != SENSOR_CONNECTION_CONNECTED) {
+	if(num_iters <= 0 || !isConnected()) {
 		return std::make_pair(false, ImuData());
 	}
 
@@ -135,6 +137,24 @@ std::pair<bool, ImuData> IMU::getData(int num_iters) const {
 	}
 
 	return std::make_pair(true, sum_data);
+}
+
+bool IMU::isConnected() const {
+	return sensor->getConnectionStatus() == SENSOR_CONNECTION_CONNECTED;
+}
+
+bool IMU::waitForConnection(float timeout_s) const {
+	auto start = std::chrono::high_resolution_clock::now();
+	while(!isConnected()) {
+		usleep(10);
+
+		auto end = std::chrono::high_resolution_clock::now();
+		std::chrono::duration<float> elapsed = end - start;
+		if(timeout_s < elapsed.count()) {
+			return false;
+		}
+	}
+	return true;
 }
 
 void IMU::connectDevice() {

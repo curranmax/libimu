@@ -25,6 +25,9 @@ public:
 
 	std::pair<bool, ImuData> getData(int num_iters) const;
 	std::pair<bool, ImuData> getData() const { return getData(1); }
+
+	bool isConnected() const;
+	bool waitForConnection(float timeout_s) const;
 private:
 	void connectDevice();
 	void disconnectDevice();
