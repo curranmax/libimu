@@ -34,13 +34,13 @@ int main(int argc, char const *argv[]) {
 
 	std::string out_filename = "";
 	if(argc >= 3) {
-		out_filename = argv[3];
+		out_filename = argv[2];
 	}
 
 	// If fso data given, connects to the GMs.
 	SimpleFSO* tx_fso = nullptr;
 	int init_gm1 = 0, init_gm2 = 0;
-	if(tx_fso_filename != "" && tx_fso_filename == "none") {
+	if(tx_fso_filename != "" && tx_fso_filename != "none") {
 		tx_fso = new SimpleFSO(tx_fso_filename);
 
 		if(!tx_fso->isGM1Connected() || !tx_fso->isGM2Connected()) {
@@ -99,10 +99,10 @@ int main(int argc, char const *argv[]) {
 	// |  Constants  |
 	// ---------------
 	// Location of Transmitter relative to reciever
-	const Vec tx_loc(0.0, 1.5, 0.0);
+	const Vec tx_loc(0.0, 2.83, 0.0);
 	
 	// Number of samples to gather at each iteration
-	const int num_samples = 30;
+	const int num_samples = 3;
 
 	// Values used in our rest mechanic
 	int zero_count = 0;
@@ -236,8 +236,8 @@ int main(int argc, char const *argv[]) {
 			Vec cur_imu_pos = position[0];
 			// 5) get current Euler angle and calculate angle resposne with current integrated position
 			float tx_angle_1 = 0, tx_angle_2 = 0; // In degrees
-			tx_angle_1 = acos((cur_imu_pos.z - tx_loc.z) / sqrt(pow(cur_imu_pos.x - tx_loc.x, 2) + pow(cur_imu_pos.y - tx_loc.y, 2) + pow(cur_imu_pos.z - tx_loc.z, 2))) * 180.0 / pi;
-			tx_angle_2 = acos((cur_imu_pos.x - tx_loc.z) / sqrt(pow(cur_imu_pos.x - tx_loc.x, 2) + pow(cur_imu_pos.y - tx_loc.y, 2))) * 180.0 / pi - 90.0;
+			tx_angle_1 = acos((cur_imu_pos.z - tx_loc.z) / sqrt(pow(cur_imu_pos.x - tx_loc.x, 2) + pow(cur_imu_pos.y - tx_loc.y, 2) + pow(cur_imu_pos.z - tx_loc.z, 2))) * 180.0 / pi - 90.0;
+			tx_angle_2 = -acos((cur_imu_pos.x - tx_loc.z) / sqrt(pow(cur_imu_pos.x - tx_loc.x, 2) + pow(cur_imu_pos.y - tx_loc.y, 2))) * 180.0 / pi + 90.0;
 			
 			// Adjust the tx_fso if it is connected.
 			int tx_gm1_val = 0, tx_gm2_val = 0;
@@ -245,7 +245,7 @@ int main(int argc, char const *argv[]) {
 			tx_gm2_val = init_gm2 + degreeToGMUnit(tx_angle_2);
 
 			if(tx_fso != nullptr) {
-				tx_fso->setGM1Val(tx_gm1_val);
+				tx_fso->setGM2Val(tx_gm2_val);
 			}
 			   
 			// ****************************** Output ****************************************************
